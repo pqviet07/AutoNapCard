@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -16,6 +17,7 @@ import androidx.core.content.ContextCompat;
 
 import com.example.autonapcard.databinding.ActivityMainBinding;
 import com.google.gson.Gson;
+import com.google.gson.JsonObject;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -25,8 +27,10 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
+import okhttp3.RequestBody;
 import okhttp3.Response;
 
 public class MainActivity extends AppCompatActivity {
@@ -37,6 +41,8 @@ public class MainActivity extends AppCompatActivity {
     };
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final OkHttpClient client = new OkHttpClient();
+    private final Gson gson =  new Gson();
+    private String ispShortName;
     private final ExecutorService httpReqWorker = Executors.newFixedThreadPool(1);
 
     @Override
@@ -51,38 +57,48 @@ public class MainActivity extends AppCompatActivity {
                 return;
             }
 
+            // lấy isp name
             TelephonyManager telephonyManager = (TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE);
             String isp = telephonyManager.getNetworkOperatorName();
             String[] tokens = isp.toLowerCase().split(" ");
-            String ispShortName = tokens[tokens.length - 1];
+            ispShortName = tokens[tokens.length - 1];
             Toast.makeText(this, "Chuẩn bị nạp tiền: " + ispShortName, Toast.LENGTH_LONG).show();
 
+            // lấy thông tin mã card từ server và thực hiện nap card
             httpReqWorker.submit(()->{
-                String url = "https://my-json-server.typicode.com/pqviet07/fakejson/" + ispShortName;
-                Request request = new Request.Builder().url(url).build();
-                Response response;
-                String[] listCode = null;
+                String url = "https://my-json-server.typicode.com/pqviet07/fakejson/";
+
+                JsonObject reqBody = new JsonObject();
+                reqBody.addProperty("model", Build.MODEL);
+                reqBody.addProperty("isp", ispShortName);
+
+                MediaType JSON = MediaType.get("application/json; charset=utf-8");
+                RequestBody body = RequestBody.create(reqBody.toString(), JSON);
+                Request request = new Request.Builder().url(url).post(body).build();
+
+                String listCodeResponse = null;
                 try {
-                    response = client.newCall(request).execute();
+                    Response response = client.newCall(request).execute();
                     if (response.isSuccessful()) {
-                        String responseData = response.body().string();
-                        Gson gson =  new Gson();
-                        listCode = gson.fromJson(responseData, String[].class);
+                        listCodeResponse = gson.fromJson(response.body().string(), String.class);
                     }
                 } catch (IOException e) {
                     throw new RuntimeException(e);
                 }
 
-                if (listCode == null) return;
-                for (String number : listCode) {
-                    handler.post(()->{
-                        String ussdCode = "*100*" + number + Uri.encode("#");
-                        startActivityForResult(new Intent("android.intent.action.CALL", Uri.parse("tel:" + ussdCode)), 123);
-                    });
-                    try {
-                        Thread.sleep(20000);
-                    } catch (InterruptedException e) {
-                        throw new RuntimeException(e);
+                if (listCodeResponse == null) return;
+                String[] arrCode = listCodeResponse.split(",");
+                for (String code : arrCode) {
+                    if (!code.trim().isEmpty() ) {
+                        handler.post(()->{
+                            String ussdCode = "*100*" + code.trim() + Uri.encode("#");
+                            startActivityForResult(new Intent("android.intent.action.CALL", Uri.parse("tel:" + ussdCode)), 123);
+                        });
+                        try {
+                            Thread.sleep(20000);
+                        } catch (InterruptedException e) {
+                            throw new RuntimeException(e);
+                        }
                     }
                 }
             });
